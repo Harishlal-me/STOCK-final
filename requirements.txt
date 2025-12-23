@@ -1,33 +1,13 @@
-# =========================
-# Core ML Stack (LOCKED)
-# =========================
-tensorflow==2.15.0
 keras==2.15.0
 numpy==1.26.4
 pandas==2.2.3
 scikit-learn==1.5.2
 joblib==1.4.2
-
-# =========================
-# Data & Finance
-# =========================
 yfinance==0.2.40
 python-dateutil==2.9.0.post0
-
-# =========================
-# Backend API
-# =========================
 fastapi==0.115.0
 uvicorn==0.30.6
 pydantic==2.9.0
-
-# =========================
-# Streamlit (UI)
-# =========================
 streamlit==1.38.0
-
-# =========================
-# Utilities (implicit deps safety)
-# =========================
 protobuf<5
 typing-extensions>=4.8.0
