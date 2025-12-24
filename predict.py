@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
 Enhanced Stock Predictor v2 - Advanced Risk Management & Analysis
+✅ Real-time price fetching from yfinance
 ✅ Improved R:R calculation (ensures > 1.5:1)
 ✅ Per-stock adaptive thresholds
 ✅ Better market regime detection
@@ -32,7 +33,90 @@ from typing import List, Dict
 import argparse
 import csv
 
-tf.get_logger().setLevel('ERROR')
+# Suppress yfinance logs
+import logging
+yf_logger = logging.getLogger('yfinance')
+yf_logger.setLevel(logging.CRITICAL)
+
+
+# ============================================================================
+# REAL-TIME PRICE FETCHER
+# ============================================================================
+class RealTimePriceFetcher:
+    """Fetch current prices from yfinance"""
+    
+    @staticmethod
+    def get_current_price(symbol: str) -> Dict:
+        """
+        Fetch real-time price data from yfinance
+        Returns: dict with current_price, price_date, high, low, volume
+        """
+        try:
+            import yfinance as yf
+            
+            # Fetch last 5 days to get most recent trading data
+            ticker = yf.Ticker(symbol)
+            hist = ticker.history(period="5d")
+            
+            if hist.empty:
+                raise ValueError(f"No data returned for {symbol}")
+            
+            # Get the most recent trading day
+            latest_data = hist.iloc[-1]
+            latest_date = hist.index[-1]
+            
+            return {
+                'current_price': float(latest_data['Close']),
+                'price_date': latest_date.strftime('%Y-%m-%d'),
+                'high': float(latest_data['High']),
+                'low': float(latest_data['Low']),
+                'open': float(latest_data['Open']),
+                'volume': float(latest_data['Volume']),
+                'datetime': latest_date
+            }
+            
+        except Exception as e:
+            raise ValueError(f"Could not fetch current price for {symbol}: {str(e)}")
+    
+    @staticmethod
+    def update_df_with_current_price(df: pd.DataFrame, symbol: str) -> pd.DataFrame:
+        """
+        Update dataframe with most recent price from yfinance
+        """
+        try:
+            current_data = RealTimePriceFetcher.get_current_price(symbol)
+            
+            # Check if we need to add a new row or update existing
+            latest_df_date = df.index[-1]
+            current_date = current_data['datetime']
+            
+            # If current date is newer than df's latest date, append new row
+            if current_date > latest_df_date:
+                new_row = pd.DataFrame({
+                    'open': [current_data['open']],
+                    'high': [current_data['high']],
+                    'low': [current_data['low']],
+                    'close': [current_data['current_price']],
+                    'volume': [current_data['volume']]
+                }, index=[current_date])
+                
+                df = pd.concat([df, new_row])
+                print(f" [✅ Added today's price: ${current_data['current_price']:.2f}]", end="")
+            
+            # If same date, update the last row
+            elif current_date.date() == latest_df_date.date():
+                df.loc[df.index[-1], 'close'] = current_data['current_price']
+                df.loc[df.index[-1], 'high'] = max(df.loc[df.index[-1], 'high'], current_data['high'])
+                df.loc[df.index[-1], 'low'] = min(df.loc[df.index[-1], 'low'], current_data['low'])
+                df.loc[df.index[-1], 'volume'] = current_data['volume']
+                print(f" [✅ Updated today's price: ${current_data['current_price']:.2f}]", end="")
+            
+            return df
+            
+        except Exception as e:
+            print(f" [⚠️ Using CSV price, yfinance failed: {str(e)}]", end="")
+            return df
+
 
 # ============================================================================
 # ADAPTIVE PROBABILITY THRESHOLDS (Per-Stock)
@@ -48,7 +132,7 @@ class AdaptiveThresholds:
         - Market regime
         - Trend consistency
         """
-        base_threshold = 0.58  # Slightly lower base
+        base_threshold = 0.55  # Lowered from 0.58 to reduce UP bias
         
         # Historical volatility pattern (last 60 days)
         if len(df) >= 60:
@@ -58,21 +142,21 @@ class AdaptiveThresholds:
             
             # If recent volatility much higher than normal, be more conservative
             if vol_ratio > 1.5:
-                vol_adj = 0.06
+                vol_adj = 0.05
             elif vol_ratio > 1.2:
-                vol_adj = 0.04
+                vol_adj = 0.03
             elif vol_ratio < 0.8:
                 vol_adj = -0.02  # More aggressive in stable periods
             else:
-                vol_adj = 0.02
+                vol_adj = 0.01
         else:
             # Fallback to absolute volatility
             if volatility > 0.04:
-                vol_adj = 0.07
+                vol_adj = 0.06
             elif volatility > 0.03:
-                vol_adj = 0.05
+                vol_adj = 0.04
             elif volatility > 0.02:
-                vol_adj = 0.03
+                vol_adj = 0.02
             else:
                 vol_adj = 0.00
         
@@ -86,24 +170,24 @@ class AdaptiveThresholds:
             trend_consistency = abs(positive_days - 10) / 10  # 0 = random, 1 = strong trend
             
             if trend_consistency > 0.6:  # Strong trend
-                regime_adj = -0.03  # Can be more aggressive
+                regime_adj = -0.02  # Can be more aggressive
             elif trend_consistency < 0.3:  # Choppy/mixed
-                regime_adj = 0.05  # Be conservative
+                regime_adj = 0.04  # Be conservative
             else:
-                regime_adj = 0.02
+                regime_adj = 0.01
         else:
-            regime_adj = 0.02
+            regime_adj = 0.01
         
         # Market regime fine-tuning
         if "BULL STRONG" in market_regime:
-            regime_adj -= 0.02
+            regime_adj -= 0.01
         elif "BEAR STRONG" in market_regime:
-            regime_adj += 0.03
+            regime_adj += 0.02
         elif "MIXED" in market_regime or "SIDEWAYS" in market_regime:
-            regime_adj += 0.04  # Much more conservative in choppy markets
+            regime_adj += 0.03  # More conservative in choppy markets
         
         adjusted_threshold = base_threshold + vol_adj + regime_adj
-        adjusted_threshold = max(0.52, min(0.75, adjusted_threshold))  # Clamp 52-75%
+        adjusted_threshold = max(0.50, min(0.72, adjusted_threshold))  # Clamp 50-72%
         
         return {
             'threshold': adjusted_threshold,
@@ -138,7 +222,6 @@ class AdaptiveThresholds:
             label = "🔴 VERY LOW"
         
         return label, score
-
 # ============================================================================
 # ENHANCED MARKET REGIME DETECTION
 # ============================================================================
@@ -217,6 +300,7 @@ class EnhancedMarketRegime:
             'volatility_regime': vol_regime,
             'vol_20d': vol_20d
         }
+
 
 # ============================================================================
 # IMPROVED RISK MANAGEMENT
@@ -318,6 +402,7 @@ class ImprovedRiskManagement:
             'max_loss': max_loss,
             'atr_pct': (atr / current_price) * 100
         }
+
 
 # ============================================================================
 # WEIGHTED DECISION SCORING
@@ -429,11 +514,11 @@ class WeightedDecisionEngine:
             'signal_strength': signal,
             'breakdown': breakdown
         }
-
 # ============================================================================
-# TECHNICAL INDICATORS (unchanged)
+# TECHNICAL INDICATORS
 # ============================================================================
 def calculate_atr(df: pd.DataFrame, period: int = 14) -> pd.Series:
+    """Calculate Average True Range"""
     high = df['high']
     low = df['low']
     close = df['close']
@@ -443,14 +528,18 @@ def calculate_atr(df: pd.DataFrame, period: int = 14) -> pd.Series:
     tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
     return tr.rolling(window=period).mean()
 
+
 def calculate_rsi(df: pd.DataFrame, period: int = 14) -> pd.Series:
+    """Calculate Relative Strength Index"""
     delta = df['close'].diff()
     gain = (delta.where(delta > 0, 0)).rolling(window=period).mean()
     loss = (-delta.where(delta < 0, 0)).rolling(window=period).mean()
     rs = gain / loss
     return 100 - (100 / (1 + rs))
 
+
 def calculate_adx(df: pd.DataFrame, period: int = 14) -> pd.Series:
+    """Calculate Average Directional Index"""
     high = df['high']
     low = df['low']
     close = df['close']
@@ -476,12 +565,16 @@ def calculate_adx(df: pd.DataFrame, period: int = 14) -> pd.Series:
     adx = 100 * di_diff.rolling(window=period).mean() / di_sum
     return adx.fillna(0)
 
+
 # ============================================================================
-# MARKET DATA FETCHER (unchanged)
+# MARKET DATA FETCHER
 # ============================================================================
 class MarketDataFetcher:
+    """Fetch market trend data (SPY)"""
+    
     @staticmethod
     def fetch_market_trend(df: pd.DataFrame, retries: int = 3) -> pd.DataFrame:
+        """Fetch SPY market trend and merge with stock data"""
         import logging
         yf_logger = logging.getLogger('yfinance')
         yf_logger.setLevel(logging.CRITICAL)
@@ -512,60 +605,81 @@ class MarketDataFetcher:
                 if attempt < retries - 1:
                     continue
         
+        # Fallback: use stock's own trend
         df['ema_200'] = df['close'].ewm(span=200, adjust=False).mean()
         df['market_trend'] = (df['close'] > df['ema_200']).astype(int)
         df = df.drop('ema_200', axis=1)
         return df
 
+
 # ============================================================================
-# FEATURE ENGINEERING (unchanged)
+# FEATURE ENGINEERING
 # ============================================================================
 def create_prediction_features(df: pd.DataFrame) -> pd.DataFrame:
+    """Create all technical features for prediction"""
     df = df.copy()
     
+    # ATR and Volatility
     df['atr'] = calculate_atr(df)
     df['atr_pct'] = df['atr'] / df['close']
     df['volatility'] = df['close'].pct_change().rolling(20).std()
+    
+    # Moving Averages
     df['ma_50'] = df['close'].rolling(50).mean()
     df['trend_strength'] = abs(df['close'] / df['ma_50'] - 1)
+    
+    # Rate of Change
     df['roc_10'] = df['close'].pct_change(10)
+    
+    # Volume
     df['volume_ratio'] = df['volume'] / df['volume'].rolling(20).mean()
     
+    # SMA
     df['sma_7'] = df['close'].rolling(7).mean()
     df['sma_7'] = (df['close'] - df['sma_7']) / df['sma_7']
     
+    # EMA
     ema_7 = df['close'].ewm(span=7, adjust=False).mean()
     df['ema_7'] = (df['close'] - ema_7) / ema_7
     
+    # RSI
     df['rsi_14'] = calculate_rsi(df, period=14)
     df['rsi_14'] = df['rsi_14'] / 100
     
+    # Volume Trend
     df['volume_ma_7'] = df['volume'].rolling(7).mean()
     df['volume_ma_30'] = df['volume'].rolling(30).mean()
     df['volume_trend_week'] = df['volume_ma_7'] / df['volume_ma_30']
     
+    # Weekly metrics
     df['weekly_return'] = df['close'].pct_change(5)
     df['weekly_volatility'] = df['close'].pct_change().rolling(5).std()
     
+    # EMA crossover
     df['ema_20'] = df['close'].ewm(span=20, adjust=False).mean()
     df['ema_50'] = df['close'].ewm(span=50, adjust=False).mean()
     df['ema_diff'] = (df['ema_20'] - df['ema_50']) / df['ema_50']
     
+    # ADX
     df['adx_14'] = calculate_adx(df, period=14)
     df['adx_14'] = df['adx_14'] / 100
     
+    # VWAP
     df['vwap'] = (df['close'] * df['volume']).rolling(20).sum() / df['volume'].rolling(20).sum()
     df['price_vwap'] = (df['close'] - df['vwap']) / df['vwap']
     
+    # Market trend
     df = MarketDataFetcher.fetch_market_trend(df)
     
     return df
+
 
 # ============================================================================
 # ENHANCED PREDICTION DATA CLASS
 # ============================================================================
 @dataclass
 class EnhancedStockPrediction:
+    """Data class for prediction results"""
     symbol: str
     current_price: float
     price_date: str
@@ -599,10 +713,14 @@ class EnhancedStockPrediction:
     reasoning: List[str]
     warnings: List[str]
 
+
 # ============================================================================
-# DATA LOADING (unchanged)
+# DATA LOADING WITH REAL-TIME PRICE UPDATE
 # ============================================================================
 def load_and_prepare_data(symbol: str):
+    """
+    Load historical data from CSV and update with real-time price from yfinance
+    """
     csv_paths = [
         Path(f"data/stock_data/{symbol}.csv"),
         Path(f"data/{symbol}.csv"),
@@ -614,6 +732,7 @@ def load_and_prepare_data(symbol: str):
     df = None
     csv_found = None
     
+    # Try to load from CSV
     for csv_path in csv_paths:
         if csv_path.exists():
             try:
@@ -624,19 +743,32 @@ def load_and_prepare_data(symbol: str):
             except:
                 continue
     
+    # If no CSV found, fetch from yfinance
     if df is None:
-        sys.path.append(str(Path(__file__).parent))
+        print(f" [Fetching from yfinance]", end="")
         try:
-            from src.data_loader import fetch_stock_data
-            df = fetch_stock_data(symbol, use_cache=True)
-        except:
-            raise ValueError(f"Could not load data for {symbol}")
+            import yfinance as yf
+            end_date = datetime.now()
+            start_date = end_date - timedelta(days=730)  # 2 years
+            
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                df = yf.download(symbol, start=start_date, end=end_date, 
+                               progress=False, timeout=15, show_errors=False)
+            
+            if df.empty:
+                raise ValueError(f"Could not fetch data for {symbol}")
+                
+        except Exception as e:
+            raise ValueError(f"Could not load data for {symbol}: {str(e)}")
     
     if df.empty:
-        raise ValueError(f"Could not fetch data for {symbol}")
+        raise ValueError(f"No data available for {symbol}")
     
+    # Standardize column names
     df.columns = df.columns.str.lower()
     
+    # Handle date index
     date_columns = ['date', 'datetime', 'timestamp', 'time']
     date_col = None
     
@@ -659,36 +791,46 @@ def load_and_prepare_data(symbol: str):
             df.index = pd.to_datetime(df.index, errors='coerce')
             df = df[df.index.notna()]
         except:
-            raise ValueError(f"Could not parse dates from CSV for {symbol}")
-    
+            raise ValueError(f"Could not parse dates for {symbol}")
+        
+# Remove timezone if present
     if df.index.tz is not None:
         df.index = df.index.tz_localize(None)
     
+    # Sort and remove duplicates
     df = df.sort_index()
     df = df[~df.index.duplicated(keep='last')]
+    
+    # **NEW: Update with real-time price from yfinance**
+    df = RealTimePriceFetcher.update_df_with_current_price(df, symbol)
     
     if len(df) > 0:
         print(f" [{len(df)} rows, latest: {df.index[-1].strftime('%Y-%m-%d')}]", end="")
     else:
-        raise ValueError(f"No valid data found in CSV for {symbol}")
+        raise ValueError(f"No valid data found for {symbol}")
     
+    # Validate required columns
     required_cols = ['open', 'high', 'low', 'close', 'volume']
     missing_cols = [col for col in required_cols if col not in df.columns]
     if missing_cols:
         raise ValueError(f"Missing required columns: {missing_cols}")
     
+    # Convert to numeric
     numeric_cols = ['open', 'high', 'low', 'close', 'volume']
     for col in numeric_cols:
         if col in df.columns:
             df[col] = pd.to_numeric(df[col], errors='coerce')
     
+    # Drop rows with NaN in required columns
     df = df.dropna(subset=required_cols)
     
     if len(df) == 0:
-        raise ValueError(f"No valid numeric data found in CSV for {symbol}")
+        raise ValueError(f"No valid numeric data found for {symbol}")
     
+    # Create prediction features
     df = create_prediction_features(df)
     
+    # Feature columns used by model
     feature_cols = [
         'atr_pct', 'volatility', 'trend_strength', 'roc_10', 'volume_ratio',
         'sma_7', 'ema_7', 'rsi_14', 'volume_trend_week',
@@ -698,13 +840,21 @@ def load_and_prepare_data(symbol: str):
     
     return df, feature_cols
 
+
 # ============================================================================
 # ENHANCED PREDICTION ENGINE
 # ============================================================================
 def predict_stock_enhanced(symbol: str) -> EnhancedStockPrediction:
-    """Enhanced prediction with all improvements"""
+    """
+    Enhanced prediction with all improvements
+    - Real-time price from yfinance
+    - Adaptive thresholds
+    - Improved risk management
+    - Weighted scoring
+    """
     symbol = symbol.upper()
     
+    # Find model
     model_paths = [
         Path("models/stock_model_fixed.keras"),
         Path("./models/stock_model_fixed.keras"),
@@ -720,16 +870,19 @@ def predict_stock_enhanced(symbol: str) -> EnhancedStockPrediction:
     if model_path is None:
         raise FileNotFoundError("Model not found. Run: python train_fixed.py")
     
+    # Load model
     model = tf.keras.models.load_model(str(model_path))
     
+    # Load and prepare data (with real-time price update)
     df, feature_cols = load_and_prepare_data(symbol)
     
+    # Get current values from most recent data
     current_price = float(df['close'].iloc[-1])
     price_date = df.index[-1].strftime('%Y-%m-%d')
-    current_atr = float(df['atr'].iloc[-1]) or 1.0
-    current_volatility = float(df['volatility'].iloc[-1]) or 0.02
+    current_atr = float(df['atr'].iloc[-1]) if not pd.isna(df['atr'].iloc[-1]) else 1.0
+    current_volatility = float(df['volatility'].iloc[-1]) if not pd.isna(df['volatility'].iloc[-1]) else 0.02
     
-    # Enhanced market regime
+    # Enhanced market regime analysis
     regime_analysis = EnhancedMarketRegime.analyze_regime(df)
     market_regime = regime_analysis['regime']
     trend_strength = regime_analysis['trend_strength']
@@ -741,31 +894,35 @@ def predict_stock_enhanced(symbol: str) -> EnhancedStockPrediction:
     )
     adaptive_threshold = threshold_info['threshold']
     
-    # Prepare features
+    # Prepare features for prediction
     from sklearn.preprocessing import RobustScaler
     
     X = df[feature_cols].values.astype(float)
     scaler = RobustScaler()
     X_scaled = scaler.fit_transform(X)
     
+    # Sequence length
     seq_len = 60
     if len(X_scaled) < seq_len:
         seq_len = min(30, len(X_scaled))
     
     if len(X_scaled) < seq_len:
-        raise ValueError(f"Insufficient data")
+        raise ValueError(f"Insufficient data (need at least {seq_len} rows)")
     
+    # Create sequence for prediction
     X_seq = X_scaled[-seq_len:].reshape(1, seq_len, len(feature_cols))
     
-    # Predict
+    # Make prediction
     predictions = model.predict(X_seq, verbose=0)
+    
+    # Extract week probability (3rd output of model)
     week_prob_up = float(predictions[2][0, 0])
     
-    # Direction
+    # Determine direction
     week_direction = "UP" if week_prob_up > 0.5 else "DOWN"
     week_direction_emoji = "📈 UP" if week_direction == "UP" else "📉 DOWN"
     
-    # Confidence with score
+    # Calculate confidence with score
     confidence, confidence_score = AdaptiveThresholds.get_confidence_label(
         week_prob_up, adaptive_threshold
     )
@@ -786,7 +943,7 @@ def predict_stock_enhanced(symbol: str) -> EnhancedStockPrediction:
     }
     decision = WeightedDecisionEngine.calculate_signal_score(pred_data)
     
-    # Reasoning and warnings
+    # Generate reasoning and warnings
     reasoning = []
     warnings = []
     
@@ -821,6 +978,7 @@ def predict_stock_enhanced(symbol: str) -> EnhancedStockPrediction:
         reasoning.append(f"⚠️ {market_regime}")
     else:
         warnings.append("Signal conflicts with market regime")
+        reasoning.append(f"⚠️ Signal vs regime mismatch")
     
     # Volatility check
     if current_volatility > 0.04:
@@ -831,6 +989,7 @@ def predict_stock_enhanced(symbol: str) -> EnhancedStockPrediction:
     # Score breakdown
     reasoning.append(f"📊 Signal Score: {decision['score']:.0f}/100")
     
+    # Create and return prediction object
     return EnhancedStockPrediction(
         symbol=symbol,
         current_price=current_price,
@@ -860,11 +1019,12 @@ def predict_stock_enhanced(symbol: str) -> EnhancedStockPrediction:
         warnings=warnings
     )
 
+
 # ============================================================================
 # CSV LOGGING
 # ============================================================================
 def log_to_csv(predictions: List[EnhancedStockPrediction], filename: str = "predictions_log.csv"):
-    """Log predictions to CSV"""
+    """Log predictions to CSV file"""
     csv_path = Path(filename)
     file_exists = csv_path.exists()
     
@@ -884,7 +1044,7 @@ def log_to_csv(predictions: List[EnhancedStockPrediction], filename: str = "pred
             writer.writeheader()
         
         for pred in predictions:
-            # Clean emojis
+            # Clean emojis from strings
             week_direction_clean = pred.week_direction.replace('📈', '').replace('📉', '').strip()
             market_regime_clean = pred.market_regime.replace('🚀', '').replace('📈', '').replace('📉', '').replace('⚖️', '').replace('🔄', '').replace('⚡', '').strip()
             confidence_clean = pred.confidence.replace('🟢', '').replace('🟡', '').replace('🟠', '').replace('🔴', '').strip()
@@ -918,7 +1078,7 @@ def log_to_csv(predictions: List[EnhancedStockPrediction], filename: str = "pred
             writer.writerow(row)
     
     print(f"\n📊 Predictions logged to: {csv_path.absolute()}")
-
+    
 # ============================================================================
 # ENHANCED DISPLAY - COMPARATIVE TABLE
 # ============================================================================
@@ -976,12 +1136,15 @@ def print_comparative_table(predictions: List[EnhancedStockPrediction]):
     trades = sum(1 for p in predictions if "BUY" in p.action or "SELL" in p.action)
     strong_signals = sum(1 for p in predictions if p.signal_score >= 75)
     rejected = sum(1 for p in predictions if "NO TRADE" in p.action)
+    up_predictions = sum(1 for p in predictions if "UP" in p.week_direction)
+    down_predictions = sum(1 for p in predictions if "DOWN" in p.week_direction)
     
     print(f"\n📈 SUMMARY:")
     print(f"   Total Analyzed: {len(predictions)}")
     print(f"   🟢 Trade Signals: {trades} ({trades/len(predictions)*100:.0f}%)")
     print(f"   ⭐ Strong Signals (Score ≥75): {strong_signals}")
     print(f"   ❌ Rejected: {rejected}")
+    print(f"   📊 Direction: {up_predictions} UP / {down_predictions} DOWN")
     print(f"   Average Score: {np.mean([p.signal_score for p in predictions]):.1f}/100")
     print(f"   Average R:R: {np.mean([p.risk_reward for p in predictions]):.2f}:1")
     print(f"   Average Probability: {np.mean([p.week_prob_up for p in predictions]):.1%}")
@@ -993,6 +1156,7 @@ def print_comparative_table(predictions: List[EnhancedStockPrediction]):
         print(f"\n🏆 BEST OPPORTUNITY: {best.symbol} (Score: {best.signal_score:.0f}, R:R: {best.risk_reward:.2f}:1)")
     
     print("="*165 + "\n")
+
 
 def print_detailed_analysis(pred: EnhancedStockPrediction):
     """Detailed individual stock analysis"""
@@ -1036,10 +1200,12 @@ def print_detailed_analysis(pred: EnhancedStockPrediction):
     
     print("="*110 + "\n")
 
+
 # ============================================================================
-# MAIN
+# MAIN FUNCTION
 # ============================================================================
 def main():
+    """Main execution function"""
     parser = argparse.ArgumentParser(
         description="Enhanced Stock Predictor v2 - Advanced Risk & Analysis",
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -1051,6 +1217,7 @@ Examples:
   python predict.py -s AAPL --detailed
   
 Features:
+  ✅ Real-time price fetching from yfinance
   ✅ Improved R:R calculation (ensures > 1.5:1)
   ✅ Per-stock adaptive thresholds
   ✅ Enhanced market regime detection
@@ -1068,6 +1235,7 @@ Features:
     
     args = parser.parse_args()
     
+    # Check setup
     if args.check:
         print("\n" + "="*80)
         print("✅ SETUP CHECK")
@@ -1094,6 +1262,7 @@ Features:
         print("="*80 + "\n")
         return
     
+    # Determine stocks to analyze
     if args.portfolio:
         symbols = ['AAPL', 'MSFT', 'GOOGL', 'AMZN', 'NVDA', 'TSLA', 'META', 'AMD']
     elif args.stocks:
@@ -1106,8 +1275,10 @@ Features:
         sys.exit(1)
     
     print(f"\n🚀 Analyzing {len(symbols)} stocks with Enhanced v2 Model")
+    print(f"   📡 Fetching real-time prices from yfinance...")
     print(f"   Analysis Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
     
+    # Run predictions
     predictions = []
     for symbol in symbols:
         try:
@@ -1134,5 +1305,10 @@ Features:
     if not args.no_log:
         log_to_csv(predictions)
 
+
+# ============================================================================
+# ENTRY POINT
+# ============================================================================
 if __name__ == "__main__":
     main()
+    
