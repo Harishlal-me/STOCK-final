@@ -34,7 +34,40 @@ from dataclasses import dataclass
 from typing import List, Dict
 import argparse
 import csv
+# Add this at the TOP of your predict.py (after other imports, before using TensorFlow)
 
+import sys
+import warnings
+warnings.filterwarnings('ignore')
+
+# Try to import TensorFlow, fallback if not available
+try:
+    import tensorflow as tf
+    TF_AVAILABLE = True
+except ImportError:
+    TF_AVAILABLE = False
+    print("⚠️ TensorFlow not available - installing...")
+    import subprocess
+    try:
+        subprocess.check_call([sys.executable, "-m", "pip", "install", "tensorflow", "-q"])
+        import tensorflow as tf
+        TF_AVAILABLE = True
+    except:
+        TF_AVAILABLE = False
+        print("❌ TensorFlow installation failed")
+
+# Then in your predict_stock_enhanced function, add this check at the start:
+def predict_stock_enhanced(symbol: str):
+    """
+    Enhanced prediction with all improvements
+    """
+    if not TF_AVAILABLE:
+        raise RuntimeError(
+            "TensorFlow is required but not installed. "
+            "Please try again - it will be installed on next run."
+        )
+    
+    # ... rest of your function code ...
 # Suppress yfinance logs
 yf_logger = logging.getLogger('yfinance')
 yf_logger.setLevel(logging.CRITICAL)
