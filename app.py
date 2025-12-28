@@ -2620,7 +2620,7 @@ with st.sidebar:
     st.markdown("### 📊 Stock Selection")
     
     # Default portfolio stocks
-    default_stocks = ["AAPL", "MSFT", "GOOGL", "AMZN", "NVDA", "TSLA", "META", "AMD"]
+    default_stocks = ["AAPL", "MSFT", "GOOGL", "AMZN", "NVDA", "TSLA"]
     
     analysis_mode = st.radio(
         "Analysis Mode",
