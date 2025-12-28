@@ -1158,7 +1158,6 @@ def predict_stock_enhanced(symbol: str):
         raise FileNotFoundError("Model not found. Run: python train_fixed.py")
     
     # Load model
-    tf = get_tf()
     model = load_model_safe(model_path)
     
     # Load and prepare data (with real-time price update)
