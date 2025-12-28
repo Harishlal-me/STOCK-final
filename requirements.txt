@@ -1,16 +1,15 @@
 # =========================
 # Core ML & Data Science
 # =========================
-numpy>=1.24.3,<2.0.0
+numpy==1.24.3
 pandas>=2.0.0
 scikit-learn>=1.3.0
 joblib>=1.3.0
 
 # =========================
-# Deep Learning (for prediction)
+# Deep Learning (TENSORFLOW)
 # =========================
-tensorflow>=2.13.0,<3.0.0
-protobuf>=3.20.0,<4.0.0
+tensorflow==2.13.0
 
 # =========================
 # Finance & Data
@@ -21,7 +20,7 @@ python-dateutil>=2.8.2
 # =========================
 # Streamlit & UI
 # =========================
-streamlit>=1.28.0,<2.0.0
+streamlit>=1.28.0
 plotly>=5.14.0
 markdown-it-py>=3.0.0
 mdurl>=0.1.2
@@ -29,7 +28,7 @@ pygments>=2.15.0
 rich>=13.0.0
 
 # =========================
-# Web Framework (optional - if using API)
+# Web Framework (optional)
 # =========================
 fastapi>=0.100.0
 uvicorn>=0.23.0
